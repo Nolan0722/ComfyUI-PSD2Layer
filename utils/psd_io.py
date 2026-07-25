@@ -48,12 +48,17 @@ def _drop_batch(t: torch.Tensor) -> torch.Tensor:
     return t.float()
 
 
-def pil_rgba_to_tensor(pil: Image.Image) -> torch.Tensor:
-    """PIL（任意模式）→ [H,W,4] float 0-1（统一为 RGBA）。"""
+def pil_rgba_to_tensor(pil: Image.Image, batch: bool = True) -> torch.Tensor:
+    """PIL（任意模式）→ ComfyUI IMAGE 张量。
+
+    默认返回 [1,H,W,4] float 0-1（ComfyUI IMAGE 约定带 batch 维）。
+    batch=False 时返回 [H,W,4]。
+    """
     if pil.mode != "RGBA":
         pil = pil.convert("RGBA")
     arr = np.asarray(pil, dtype=np.float32) / 255.0
-    return torch.from_numpy(arr)
+    t = torch.from_numpy(arr)
+    return t.unsqueeze(0) if batch else t
 
 
 def tensor_to_pil_rgba(t: torch.Tensor) -> Image.Image:
@@ -102,16 +107,43 @@ def build_psd(layers: list[dict], canvas_w: int, canvas_h: int) -> PSDImage:
     )
     for L in layers:
         blend = parse_blend_mode(L.get("blend_mode", "NORMAL"))
+        raw_name = str(L.get("name", "Layer"))
         layer = psd.create_pixel_layer(
             L["image"],
-            name=str(L.get("name", "Layer")),
+            name="Layer",
             top=int(L.get("top", 0)),
             left=int(L.get("left", 0)),
             opacity=int(L.get("opacity", 255)),
             blend_mode=blend,
         )
+        layer.name = raw_name  # 通过 setter 写入 Unicode 图层名（中文等）
         layer.visible = bool(L.get("visible", True))
     return psd
+
+
+def rasterize_layer(layer, include_hidden: bool = False) -> Image.Image | None:
+    """将 psd_tools 图层栅格化为 PIL RGBA（参考 LayerStyle / HAIGC 的 fallback 链）。"""
+    if not layer.visible and not include_hidden:
+        return None
+
+    was_visible = layer.visible
+    if include_hidden and not was_visible:
+        layer.visible = True
+
+    pil = None
+    try:
+        pil = layer.composite()
+        if pil is None and hasattr(layer, "topil"):
+            pil = layer.topil()
+    finally:
+        if include_hidden and not was_visible:
+            layer.visible = was_visible
+
+    if pil is None:
+        return None
+    if pil.mode != "RGBA":
+        pil = pil.convert("RGBA")
+    return pil
 
 
 def psd_to_flat_tensor(psd: PSDImage) -> torch.Tensor:
@@ -119,7 +151,7 @@ def psd_to_flat_tensor(psd: PSDImage) -> torch.Tensor:
     pil = psd.composite()
     if pil is None:
         pil = Image.new("RGBA", psd.size)
-    return pil_rgba_to_tensor(pil).unsqueeze(0)
+    return pil_rgba_to_tensor(pil)
 
 
 def save_psd(psd: PSDImage, path: str) -> str:

@@ -6,12 +6,16 @@ ComfyUI-PSD2Layer 插件开发的官方规范与参考实现。所有路径相�
 
 ```
 reference/
-├── comfyui_official_docs/    # ComfyUI 官方文档 (Comfy-Org/docs) — 含中文版
-├── reference_projects/       # 4 个相关 ComfyUI 自定义节点
-│   ├── ComfyUI-Layers/       #   写 PSD (pytoshop)
-│   ├── layerdivider/         #   写 PSD 带 offset (pytoshop)
-│   ├── ComfyUI-LayerDivider/ #   layerdivider 的 ComfyUI 封装
-│   └── ComfyUI_LayerStyle/   #   读 PSD (LayerUtility: Load PSD)
+├── comfyui_official_docs/    # ComfyUI 官方文档 (Comfy-Org/docs) — 克隆可能因网络失败
+├── reference_projects/       # 相关 ComfyUI 自定义节点（已克隆）
+│   ├── ComfyUI-Layers/           # 写 PSD (pytoshop)，全画布无 offset
+│   ├── layerdivider/             # 写 PSD (pytoshop)，offset 仍为 0
+│   ├── ComfyUI-LayerDivider/     # layerdivider 的 ComfyUI 封装
+│   ├── ComfyUI_LayerStyle/       # 图层工具集（LoadPSD 已迁到 Advance）
+│   ├── ComfyUI_LayerStyle_Advance/ # LayerUtility: LoadPSD 源码
+│   ├── comfyui_psd/              # 链式 PSDLayer + Save（psd_tools，无 offset）
+│   ├── Comfyui-HAIGC-PSD/        # 读+写全套（pytoshop nested_layers，有 x/y）
+│   └── comfyui_psd_smart_object/ # 智能对象 mockup（读 PSD，非通用拆层）
 ├── libraries/
 │   └── psd-tools/            # 主用库源码
 └── README.md                 # 本文件
@@ -56,10 +60,43 @@ reference/
 ### ComfyUI-LayerDivider — ComfyUI 节点封装范例
 - `reference_projects/ComfyUI-LayerDivider/` — 看 `__init__.py` 的 NODE_CLASS_MAPPINGS 组织、节点如何调用 layerdivider
 
-### ComfyUI_LayerStyle — 读 PSD
-- `reference_projects/ComfyUI_LayerStyle/` — `LayerUtility: Load PSD` 节点（读图层、栅格化、转 tensor 的完整路径）。代码可能在 `py/` 下编译模块，未直接 import psd_tools；作整体结构参考
+### ComfyUI_LayerStyle / ComfyUI_LayerStyle_Advance — 读 PSD
+- LoadPSD 已迁到 **`ComfyUI_LayerStyle_Advance/py/loadpsd.py`**
+- 学：`PSDImage.open`、`layer.composite()` / `topil()`、按 index/name 提取单层
+- 局限：输出单图层或 flat，**无「拆全部图层 + 旁路元数据 + 精确还原」管线**
+
+### comfyui_psd — 链式写 PSD (psd_tools)
+- **`reference_projects/comfyui_psd/nodes.py`**
+- 学：自定义类型 `PSD`（`PSDData` 类链式 append）、`PixelLayer.frompil` + `psd.append`
+- 局限：画布 = 最大图层尺寸，**所有层 top/left=0**，无 offset
+
+### Comfyui-HAIGC-PSD — 读+写全套 (pytoshop)
+- **`haigc_psd.py`**（约 3400 行，功能最全）
+- 读：`HAIGC_LoadPSD` — `PSDImage.open`，支持「按PSD原位置」/「完整原图层」两种输出模式
+- 写：`HAIGC_SavePSD` — `nested_layers.nested_layers_to_psd()`，图层 dict 含 `x/y/width/height`
+- 学：混合模式中英映射、背景适应、批次分组、图层样式栅格化
+- 局限：元数据走 `PSD_LAYERS` dict 链，**非独立旁路端口**；写路径用 pytoshop 而非 psd_tools
+
+### comfyui_psd_smart_object — 智能对象 mockup
+- **`psd_mockup_node.py`** — 读 PSD 智能对象层，把图片投影到 mockup
+- 学：`SmartObjectLayer`、transform box、PSD 上传前端
+- 局限：**非通用拆层/还原**，专用于 mockup 替换
 
 ---
+
+## 5. 竞品对比与本项目定位
+
+| 插件 | 读 PSD | 写 PSD | offset 定位 | 旁路元数据 | 处理后还原 |
+|------|--------|--------|-------------|------------|------------|
+| ComfyUI-Layers | ✗ | ✓ pytoshop | ✗ (0,0) | ✗ | ✗ |
+| layerdivider | 部分 | ✓ pytoshop | ✗ (0,0) | ✗ | ✗ |
+| comfyui_psd | ✗ | ✓ psd_tools | ✗ | ✗ | ✗ |
+| LayerStyle LoadPSD | ✓ psd_tools | ✗ | 读时有 bbox | ✗ | ✗ |
+| HAIGC-PSD | ✓ psd_tools | ✓ pytoshop | ✓ x/y | PSD_LAYERS 链 | 需整条 HAIGC 管线 |
+| **ComfyUI-PSD2Layer** | ✓ psd_tools | ✓ psd_tools | ✓ top/left | **LAYER_INFO 旁路** | **Load→任意处理→Rebuild** |
+
+**本项目的核心差异**：`LAYER_INFO` 自定义类型作为独立端口旁路，处理节点只碰 `IMAGE`，位置/alpha/属性不经过处理黑盒，Rebuild 时按 `top/left` + 自动 scale 精确还原。
+
 
 ## 3. psd-tools 库（主用）
 
@@ -118,4 +155,8 @@ class MyNode:
 - layerdivider: https://github.com/mattyamonaca/layerdivider
 - ComfyUI-LayerDivider: https://github.com/jtydhr88/ComfyUI-LayerDivider
 - ComfyUI_LayerStyle: https://github.com/chflame163/ComfyUI_LayerStyle
+- ComfyUI_LayerStyle_Advance: https://github.com/chflame163/ComfyUI_LayerStyle_Advance
+- comfyui_psd: https://github.com/sugarkwork/comfyui_psd
+- Comfyui-HAIGC-PSD: https://github.com/HAIGC/Comfyui-HAIGC-PSD
+- comfyui_psd_smart_object: https://github.com/leafiy/comfyui_psd_smart_object
 - psd-tools: https://github.com/psd-tools/psd-tools

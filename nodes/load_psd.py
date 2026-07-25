@@ -44,7 +44,7 @@ class PSDLayerExtractor:
 
         if not collected:
             # PSD 无可栅格化图层时，输出一个 1x1 透明占位，避免空 list 报错
-            empty = torch.zeros(1, 1, 4, dtype=torch.float32)
+            empty = torch.zeros(1, 1, 1, 4, dtype=torch.float32)
             empty_info = layer_info.make_layer_info(
                 left=0, top=0, width=1, height=1, opacity=255,
                 blend_mode="NORMAL", name="empty", visible=True,
@@ -54,7 +54,7 @@ class PSDLayerExtractor:
 
         images, infos = [], []
         for layer, pil in collected:
-            tensor = psd_io.pil_rgba_to_tensor(pil)  # [H,W,4]
+            tensor = psd_io.pil_rgba_to_tensor(pil)  # [1,H,W,4]
             images.append(tensor)
             infos.append(
                 layer_info.make_layer_info(
@@ -75,6 +75,7 @@ class PSDLayerExtractor:
 
     @staticmethod
     def _resolve_path(psd_file: str) -> str:
+        psd_file = str(psd_file).strip().strip('"').strip("'")
         if psd_file and os.path.isfile(psd_file):
             return os.path.abspath(psd_file)
         # 尝试相对 ComfyUI input 目录
@@ -96,7 +97,7 @@ class PSDLayerExtractor:
         if layer.is_group():
             if flatten_groups:
                 # 组作为单张合成图（含子层视觉效果）
-                pil = layer.composite()
+                pil = psd_io.rasterize_layer(layer, include_hidden=include_hidden)
                 if pil is not None:
                     out.append((layer, pil))
             else:
@@ -104,7 +105,6 @@ class PSDLayerExtractor:
                 for child in layer:
                     PSDLayerExtractor._walk(child, out, include_hidden, flatten_groups)
         else:
-            # 像素 / 文字 / 形状 / 智能对象等：栅格化为 RGBA
-            pil = layer.composite()
+            pil = psd_io.rasterize_layer(layer, include_hidden=include_hidden)
             if pil is not None:
                 out.append((layer, pil))

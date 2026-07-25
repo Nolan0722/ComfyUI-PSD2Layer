@@ -12,7 +12,8 @@ import numpy as np
 import torch
 from PIL import Image
 
-from ..utils import layer_info, psd_io
+from ..utils import layer_info as li
+from ..utils import psd_io
 
 
 def _as_list(x):
@@ -47,7 +48,7 @@ class PSDRebuilder:
         return {
             "required": {
                 "images": ("IMAGE",),
-                "layer_info": (layer_info.LAYER_INFO_TYPE, {"forceInput": True}),
+                "layer_info": (li.LAYER_INFO_TYPE, {"forceInput": True}),
                 "canvas_width": (
                     "INT",
                     {"default": 0, "min": 0, "max": 65536, "step": 1},
@@ -98,7 +99,7 @@ class PSDRebuilder:
         if scale and float(scale) > 0:
             sx = sy = float(scale)
         else:
-            sx, sy = layer_info.estimate_scale(imgs, infos)
+            sx, sy = li.estimate_scale(imgs, infos)
 
         # 画布：用户指定优先；否则按原画布 × 缩放自动跟随
         c0 = infos[0]

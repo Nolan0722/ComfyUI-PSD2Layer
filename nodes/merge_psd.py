@@ -65,7 +65,7 @@ class PSDMerger:
             for layer in psd:
                 if not layer.visible:
                     continue
-                pil = layer.composite()
+                pil = psd_io.rasterize_layer(layer)
                 if pil is None:
                     continue
                 layers.append(
@@ -87,6 +87,7 @@ class PSDMerger:
 
     @staticmethod
     def _resolve(psd_file: str) -> str:
+        psd_file = str(psd_file).strip().strip('"').strip("'")
         if psd_file and os.path.isfile(psd_file):
             return os.path.abspath(psd_file)
         try:
