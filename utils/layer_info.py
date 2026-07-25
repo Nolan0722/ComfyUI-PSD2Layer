@@ -27,12 +27,18 @@ def make_layer_info(
     alpha: torch.Tensor | None,
     canvas_w: int,
     canvas_h: int,
+    group_path: list[str] | None = None,
+    group_meta: list[dict[str, Any]] | None = None,
+    group_indices: list[int] | None = None,
 ) -> dict[str, Any]:
     """构造单层 LAYER_INFO 字典。
 
     alpha: 该图层原始 alpha 张量 [H,W]（float 0-1），供还原节点在
            alpha_source='original' 时还原图层形状。可为 None。
     canvas_w/canvas_h: 原 PSD 画布尺寸，冗余编码以便还原节点取默认画布。
+    group_path: 自外到内的父组名称链。
+    group_meta: 与组链一一对应的组属性。
+    group_indices: 自外到内各父组在兄弟中的序号（唯一定位同名组）。
     """
     return {
         "left": int(left),
@@ -46,28 +52,12 @@ def make_layer_info(
         "alpha": alpha,
         "canvas_w": int(canvas_w),
         "canvas_h": int(canvas_h),
+        "group_path": list(group_path or []),
+        "group_meta": list(group_meta or []),
+        "group_indices": list(group_indices or []),
     }
 
 
 def is_layer_info(obj: Any) -> bool:
     """判断对象是否为合法的 LAYER_INFO 字典。"""
     return isinstance(obj, dict) and "left" in obj and "top" in obj and "width" in obj
-
-
-def estimate_scale(
-    images: list[torch.Tensor], layer_infos: list[dict[str, Any]]
-) -> tuple[float, float]:
-    """根据第一张处理后图像尺寸 / 原始图层尺寸，推算 (sx, sy) 缩放系数。
-
-    用于节点2 的 scale 自动检测：用户若对所有图层做了统一放大/缩小（如 2x 超分），
-    offset 也需按同比例缩放，否则图层位置会错位。
-    """
-    if not images or not layer_infos:
-        return 1.0, 1.0
-    img = images[0]
-    ih, iw = img.shape[-3], img.shape[-2]  # [H, W, C]
-    info = layer_infos[0]
-    ow, oh = info["width"], info["height"]
-    sx = (iw / ow) if ow else 1.0
-    sy = (ih / oh) if oh else 1.0
-    return sx, sy

@@ -1,28 +1,25 @@
 """节点1：PSDLayerExtractor — 读取 PSD，按图层拆分为图像管线 + LAYER_INFO 旁路。
 
 输出 N 个独立 IMAGE（不同尺寸可逐张流过下游任意插件）+ 一一对应的 LAYER_INFO
-（承载每层位置/尺寸/属性，绕过用户的处理黑盒）。
+（承载每层位置/尺寸/属性及组层级，绕过用户的处理黑盒）。
 """
 from __future__ import annotations
 
-import os
-
 import torch
-from psd_tools import PSDImage
 
 from ..utils import layer_info, psd_io
 
 
 class PSDLayerExtractor:
-    """读取 PSD 文件，把每个图层作为图像输出，并旁路图层元数据。"""
+    """读取 PSD，把每个图层作为图像输出，并旁路图层元数据。"""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "psd_file": ("STRING", {"default": "", "multiline": False}),
-                "include_hidden": ("BOOLEAN", {"default": False}),
-                "flatten_groups": ("BOOLEAN", {"default": True}),
+                "psd": (psd_io.PSD_TYPE, {"forceInput": True}),
+                "include_hidden": ("BOOLEAN", {"default": True}),
+                "background": (list(psd_io.BACKGROUND_CHOICES), {"default": "none"}),
             }
         }
 
@@ -32,19 +29,17 @@ class PSDLayerExtractor:
     OUTPUT_IS_LIST = (True, True)
     CATEGORY = "PSD2Layer"
 
-    def extract(self, psd_file, include_hidden=False, flatten_groups=True):
-        psd_file = self._resolve_path(psd_file)
-        psd = PSDImage.open(psd_file)
+    def extract(self, psd, include_hidden=True, background="none"):
+        psd = psd_io.resolve_psd_image(psd)
         canvas_w, canvas_h = psd.width, psd.height
 
-        # 收集 (layer, pil_rgba)，顺序 bottom→top
         collected: list = []
         for layer in psd:
-            self._walk(layer, collected, include_hidden, flatten_groups)
+            self._walk(layer, psd, collected, include_hidden, [], [])
 
         if not collected:
-            # PSD 无可栅格化图层时，输出一个 1x1 透明占位，避免空 list 报错
-            empty = torch.zeros(1, 1, 1, 4, dtype=torch.float32)
+            ch = 4 if psd_io.background_rgb(background) is None else 3
+            empty = torch.zeros(1, 1, 1, ch, dtype=torch.float32)
             empty_info = layer_info.make_layer_info(
                 left=0, top=0, width=1, height=1, opacity=255,
                 blend_mode="NORMAL", name="empty", visible=True,
@@ -53,8 +48,20 @@ class PSDLayerExtractor:
             return ([empty], [empty_info])
 
         images, infos = [], []
-        for layer, pil in collected:
-            tensor = psd_io.pil_rgba_to_tensor(pil)  # [1,H,W,4]
+        for layer, pil, group_chain, index_chain in collected:
+            tensor_rgba = psd_io.pil_rgba_to_tensor(pil)
+            alpha = psd_io.tensor_to_alpha(tensor_rgba)
+            tensor = psd_io.apply_background(tensor_rgba, background)
+            group_meta = [
+                {
+                    "name": g.name,
+                    "visible": g.visible,
+                    "opacity": g.opacity,
+                    "blend_mode": psd_io.blend_mode_to_str(g.blend_mode),
+                    "open_folder": g.open_folder,
+                }
+                for g in group_chain
+            ]
             images.append(tensor)
             infos.append(
                 layer_info.make_layer_info(
@@ -66,45 +73,43 @@ class PSDLayerExtractor:
                     blend_mode=psd_io.blend_mode_to_str(layer.blend_mode),
                     name=layer.name,
                     visible=layer.visible,
-                    alpha=psd_io.tensor_to_alpha(tensor),
+                    alpha=alpha,
                     canvas_w=canvas_w,
                     canvas_h=canvas_h,
+                    group_path=[m["name"] for m in group_meta],
+                    group_meta=group_meta,
+                    group_indices=list(index_chain),
                 )
             )
         return (images, infos)
 
     @staticmethod
-    def _resolve_path(psd_file: str) -> str:
-        psd_file = str(psd_file).strip().strip('"').strip("'")
-        if psd_file and os.path.isfile(psd_file):
-            return os.path.abspath(psd_file)
-        # 尝试相对 ComfyUI input 目录
-        try:
-            from folder_paths import get_input_directory
-
-            cand = os.path.join(get_input_directory(), psd_file)
-            if os.path.isfile(cand):
-                return os.path.abspath(cand)
-        except Exception:
-            pass
-        raise FileNotFoundError(f"PSD file not found: {psd_file!r}")
-
-    @staticmethod
-    def _walk(layer, out, include_hidden, flatten_groups):
-        """递归收集图层。组图层按 flatten_groups 决定合成或展平。"""
-        if not layer.visible and not include_hidden:
-            return
+    def _walk(layer, parent, out, include_hidden, group_chain, index_chain):
+        """递归收集像素图层；组仅记录层级，不合成输出。"""
+        if not include_hidden:
+            if hasattr(layer, "is_visible") and not layer.is_visible():
+                return
+            if not getattr(layer, "visible", True):
+                return
         if layer.is_group():
-            if flatten_groups:
-                # 组作为单张合成图（含子层视觉效果）
-                pil = psd_io.rasterize_layer(layer, include_hidden=include_hidden)
-                if pil is not None:
-                    out.append((layer, pil))
-            else:
-                # 展平：组内每个子层独立输出
-                for child in layer:
-                    PSDLayerExtractor._walk(child, out, include_hidden, flatten_groups)
+            my_index = _sibling_index(layer, parent)
+            for child in layer:
+                PSDLayerExtractor._walk(
+                    child,
+                    layer,
+                    out,
+                    include_hidden,
+                    group_chain + [layer],
+                    index_chain + [my_index],
+                )
         else:
             pil = psd_io.rasterize_layer(layer, include_hidden=include_hidden)
             if pil is not None:
-                out.append((layer, pil))
+                out.append((layer, pil, group_chain, index_chain))
+
+
+def _sibling_index(layer, parent) -> int:
+    for i, sibling in enumerate(parent):
+        if sibling is layer:
+            return i
+    return 0

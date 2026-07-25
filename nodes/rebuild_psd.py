@@ -1,47 +1,28 @@
-"""节点2：PSDRebuilder — 把处理后的图层图像按原始位置/顺序还原成分层 PSD。
+"""节点2：PSDRebuilder — 按 layer_info 将图层归位并输出 PSD。
 
-同时接收「处理后的 IMAGE 列表」与「旁路的 LAYER_INFO 列表」，按索引一一对应，
-按原始 xy 偏移（可选自动缩放）把每张图贴回画布，输出 PSD。
+输入可为放大后的图层：按相对 layer_info 的缩放比同比例调整位置与画布尺寸。
 """
 from __future__ import annotations
 
-import os
-import time
-
-import numpy as np
-import torch
-from PIL import Image
-
 from ..utils import layer_info as li
 from ..utils import psd_io
+from ..utils.merge_preview import save_node_flat_preview_ui
 
 
 def _as_list(x):
-    """INPUT_IS_LIST 下输入应为 list；兼容被包成 [[...]] 的情况。"""
     if isinstance(x, list) and len(x) == 1 and isinstance(x[0], list):
         return x[0]
     return x if isinstance(x, list) else [x]
 
 
-def _scalar(x):
-    """widget 标量在 INPUT_IS_LIST 下可能被广播成 list，取单值。"""
-    return x[0] if isinstance(x, list) and x else x
-
-
-def _resize_alpha(alpha_tensor: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
-    """把原始 alpha 缩放到处理后图像的目标尺寸（alpha_source='original' 时用）。"""
-    a = psd_io._drop_batch(alpha_tensor)
-    if a.shape[0] == target_h and a.shape[1] == target_w:
-        return a
-    pil = Image.fromarray(
-        np.clip(a.numpy() * 255.0, 0, 255).astype(np.uint8), mode="L"
-    )
-    pil = pil.resize((target_w, target_h), Image.LANCZOS)
-    return torch.from_numpy(np.asarray(pil, dtype=np.float32) / 255.0)
+def _scalar(x, default=0):
+    if isinstance(x, list):
+        return x[0] if x else default
+    return x if x is not None else default
 
 
 class PSDRebuilder:
-    """把处理后的图层图像按原始位置/顺序还原成分层 PSD。"""
+    """按 layer_info 归位写入 PSD；放大图层时同步缩放位置与画布。"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -57,98 +38,78 @@ class PSDRebuilder:
                     "INT",
                     {"default": 0, "min": 0, "max": 65536, "step": 1},
                 ),
-                "scale": (
-                    "FLOAT",
-                    {"default": 0.0, "min": 0.0, "max": 100.0, "step": 0.01},
-                ),
-                "alpha_source": (["original", "processed"],),
-                "filename_prefix": ("STRING", {"default": "PSD2Layer"}),
-            }
+            },
+            "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("STRING", "IMAGE")
-    RETURN_NAMES = ("psd_path", "flat_preview")
+    RETURN_TYPES = (psd_io.PSD_TYPE, "IMAGE")
+    RETURN_NAMES = ("psd", "flat_preview")
     FUNCTION = "rebuild"
     INPUT_IS_LIST = True
     CATEGORY = "PSD2Layer"
 
-    def rebuild(
-        self,
-        images,
-        layer_info,
-        canvas_width,
-        canvas_height,
-        scale,
-        alpha_source,
-        filename_prefix,
-    ):
+    def rebuild(self, images, layer_info, canvas_width, canvas_height, unique_id=None):
         imgs = _as_list(images)
         infos = _as_list(layer_info)
-        canvas_width = _scalar(canvas_width)
-        canvas_height = _scalar(canvas_height)
-        scale = _scalar(scale)
-        alpha_source = _scalar(alpha_source)
-        filename_prefix = _scalar(filename_prefix)
 
+        if not imgs:
+            raise ValueError("未提供任何图层图像")
+        if not infos:
+            raise ValueError("未提供 layer_info，请从 Load PSD Layers 旁路接入")
         if len(imgs) != len(infos):
             raise ValueError(
-                f"图像数量({len(imgs)})与图层数量({len(infos)})不一致，需一一对应"
+                f"图像数量({len(imgs)})与 layer_info 数量({len(infos)})不一致，需一一对应"
             )
 
-        # 缩放系数：scale>0 用手动值，否则按首图比例自动推算
-        if scale and float(scale) > 0:
-            sx = sy = float(scale)
-        else:
-            sx, sy = li.estimate_scale(imgs, infos)
-
-        # 画布：用户指定优先；否则按原画布 × 缩放自动跟随
         c0 = infos[0]
-        W = int(canvas_width) if canvas_width else max(1, round(c0["canvas_w"] * sx))
-        H = int(canvas_height) if canvas_height else max(1, round(c0["canvas_h"] * sy))
+        user_cw = int(_scalar(canvas_width, 0))
+        user_ch = int(_scalar(canvas_height, 0))
+        base_cw = max(1, int(c0["canvas_w"]))
+        base_ch = max(1, int(c0["canvas_h"]))
+
+        placements: list[tuple] = []
+        max_sx = 1.0
+        max_sy = 1.0
+
+        for img, info in zip(imgs, infos):
+            pil = psd_io.tensor_to_pil_rgba(psd_io._drop_batch(img))
+            left, top, sx, sy = psd_io.scaled_layer_placement(pil, info)
+            max_sx = max(max_sx, sx)
+            max_sy = max(max_sy, sy)
+            placements.append((pil, info, left, top))
+
+        canvas_placements = [(pil, left, top) for pil, _, left, top in placements]
+        W, H = psd_io.compute_rebuild_canvas_size(
+            canvas_placements,
+            base_cw,
+            base_ch,
+            max_sx,
+            max_sy,
+            user_canvas_w=user_cw,
+            user_canvas_h=user_ch,
+        )
 
         layers = []
-        for img, info in zip(imgs, infos):
-            t = psd_io._drop_batch(img)  # [H,W,C]
-            th, tw = t.shape[0], t.shape[1]
-
-            # alpha 来源：original=用旁路原始 alpha（缩放到当前尺寸），processed=用图像自带
-            if alpha_source == "original" and info.get("alpha") is not None:
-                alpha = _resize_alpha(info["alpha"], th, tw)
-                t = torch.cat([t[..., :3], alpha.unsqueeze(-1)], dim=-1)
-            elif t.shape[-1] == 3:
-                t = torch.cat(
-                    [t, torch.ones(th, tw, 1, dtype=t.dtype)], dim=-1
-                )
-
+        for pil, info, left, top in placements:
             layers.append(
                 {
-                    "image": psd_io.tensor_to_pil_rgba(t),
-                    "left": round(info["left"] * sx),
-                    "top": round(info["top"] * sy),
+                    "image": pil,
+                    "left": left,
+                    "top": top,
                     "opacity": info["opacity"],
                     "blend_mode": info["blend_mode"],
                     "name": info["name"],
                     "visible": info["visible"],
+                    "group_meta": info.get("group_meta"),
+                    "group_indices": info.get("group_indices"),
                 }
             )
 
-        psd = psd_io.build_psd(layers, W, H)
-        path = self._output_path(str(filename_prefix))
-        psd_io.save_psd(psd, path)
-        preview = psd_io.psd_to_flat_tensor(psd)
-        return (path, preview)
-
-    @staticmethod
-    def _output_path(prefix: str) -> str:
-        try:
-            from folder_paths import get_output_directory
-
-            out_dir = get_output_directory()
-        except Exception:
-            out_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output"
-            )
-        sub = os.path.join(out_dir, "PSD2Layer")
-        os.makedirs(sub, exist_ok=True)
-        fname = f"{prefix}_{int(time.time() * 1000)}.psd"
-        return os.path.join(sub, fname)
+        psd = psd_io.build_psd_hierarchical(layers, W, H)
+        flat = psd_io.flatten_layers_on_canvas(layers, W, H)
+        ui_img = save_node_flat_preview_ui(_scalar(unique_id, None), flat)
+        preview = psd_io.pil_rgba_to_tensor(flat)
+        result = (psd_io.make_psd_data_ref(psd), preview)
+        if ui_img:
+            return {"ui": {"images": [ui_img]}, "result": result}
+        return result
