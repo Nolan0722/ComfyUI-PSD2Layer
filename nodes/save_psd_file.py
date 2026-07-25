@@ -4,7 +4,7 @@ from __future__ import annotations
 from ..utils import psd_io
 
 
-class PSDFileSaver:
+class SavePSDFile:
     """接收 PSD 引用，按 output_dir + filename 保存文件。"""
 
     @classmethod

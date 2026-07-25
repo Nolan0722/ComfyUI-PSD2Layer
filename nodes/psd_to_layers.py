@@ -1,4 +1,4 @@
-"""节点1：PSDLayerExtractor — 读取 PSD，按图层拆分为图像管线 + LAYER_INFO 旁路。
+"""节点：PSD to Layers — 读取 PSD，按图层拆分为图像管线 + LAYER_INFO 旁路。
 
 输出 N 个独立 IMAGE（不同尺寸可逐张流过下游任意插件）+ 一一对应的 LAYER_INFO
 （承载每层位置/尺寸/属性及组层级，绕过用户的处理黑盒）。
@@ -10,7 +10,7 @@ import torch
 from ..utils import layer_info, psd_io
 
 
-class PSDLayerExtractor:
+class PSDToLayers:
     """读取 PSD，把每个图层作为图像输出，并旁路图层元数据。"""
 
     @classmethod
@@ -94,7 +94,7 @@ class PSDLayerExtractor:
         if layer.is_group():
             my_index = _sibling_index(layer, parent)
             for child in layer:
-                PSDLayerExtractor._walk(
+                PSDToLayers._walk(
                     child,
                     layer,
                     out,

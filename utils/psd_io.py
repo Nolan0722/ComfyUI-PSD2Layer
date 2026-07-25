@@ -481,7 +481,7 @@ def rotate_layer_entries(
         dx, dy = lc_x - rcx, lc_y - rcy
         new_cx = rcx + dx * cos_a - dy * sin_a
         new_cy = rcy + dx * sin_a + dy * cos_a
-        pil = pil.rotate(-angle_deg, expand=True, resample=Image.LANCZOS)
+        pil = pil.rotate(-angle_deg, expand=True, resample=Image.BICUBIC)
         nlw, nlh = pil.size
         L["image"] = pil
         L["left"] = int(round(new_cx - nlw / 2))

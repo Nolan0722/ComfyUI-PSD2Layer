@@ -1,7 +1,24 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-const MERGE_NODE = "PSD2Layer Merge PSD Files";
+const MERGE_CONFIGS = {
+    "PSD2Layer Merge PSD Files": {
+        slotPrefix: "psd",
+        inputType: "PSD",
+        allowPath: true,
+        emptyHint: "连接 PSD 后拖动画布操作",
+        connectHint: "请连接 PSD 输出到 psd_1…",
+        slotLabel: (i) => `psd_${i}`,
+    },
+    "PSD2Layer Merge Layer Images": {
+        slotPrefix: "image",
+        inputType: "IMAGE",
+        allowPath: false,
+        emptyHint: "连接图像后拖动画布操作",
+        connectHint: "请连接图像到 image_1…（先 Queue 上游以刷新预览）",
+        slotLabel: (i) => `image_${i}`,
+    },
+};
 const LOAD_FILE_NODE = "PSD2Layer Load File";
 const PREVIEW_MAX = 1200;
 const DEFAULT_CANVAS_W = 3000;
@@ -183,17 +200,19 @@ function getGraphLink(linkId) {
     return null;
 }
 
-function connectedSlotSource(node, slotIndex) {
-    const input = node.inputs?.find((inp) => inp.name === `psd_${slotIndex}`);
+function connectedSlotSource(node, slotIndex, cfg) {
+    const input = node.inputs?.find(
+        (inp) => inp.name === `${cfg.slotPrefix}_${slotIndex}`,
+    );
     if (!input || input.link == null) return null;
     const link = getGraphLink(input.link);
     if (!link) return null;
     const upstream = app.graph.getNodeById(link.origin_id);
     if (!upstream) return null;
     const out = upstream.outputs?.[link.origin_slot];
-    if (!out || out.type !== "PSD") return null;
+    if (!out || out.type !== cfg.inputType) return null;
 
-    if (upstream.type === LOAD_FILE_NODE) {
+    if (cfg.allowPath && upstream.type === LOAD_FILE_NODE) {
         const pathWidget = upstream.widgets?.find((w) => w.name === "psd_file");
         const path = pathWidget?.value;
         if (path && String(path).trim()) {
@@ -203,10 +222,10 @@ function connectedSlotSource(node, slotIndex) {
     return { kind: "node", nodeId: link.origin_id };
 }
 
-function collectSlots(node) {
+function collectSlots(node, cfg) {
     const slots = [];
     for (let i = 1; i <= 5; i++) {
-        const source = connectedSlotSource(node, i);
+        const source = connectedSlotSource(node, i, cfg);
         if (!source) continue;
         slots.push({
             slotIndex: i,
@@ -535,7 +554,8 @@ app.registerExtension({
     name: "PSD2Layer.MergeCanvas",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== MERGE_NODE) return;
+        const cfg = MERGE_CONFIGS[nodeData.name];
+        if (!cfg) return;
 
         injectMergeStyles();
 
@@ -579,7 +599,7 @@ app.registerExtension({
             checker.className = "psd2layer-merge-checker";
             const emptyHint = document.createElement("div");
             emptyHint.className = "psd2layer-merge-empty";
-            emptyHint.textContent = "连接 PSD 后拖动画布操作";
+            emptyHint.textContent = cfg.emptyHint;
             const canvas = document.createElement("canvas");
             canvas.style.visibility = "hidden";
             const sceneCanvas = document.createElement("canvas");
@@ -638,7 +658,7 @@ app.registerExtension({
 
             const updateSlotBar = () => {
                 slotBar.innerHTML = "";
-                const slots = collectSlots(node);
+                const slots = collectSlots(node, cfg);
                 if (!slots.length) return;
                 const label = document.createElement("span");
                 label.className = "psd2layer-merge-slotlabel";
@@ -650,7 +670,7 @@ app.registerExtension({
                     btn.className =
                         "psd2layer-merge-slotbtn" +
                         (selectedSlot === s.slotIndex ? " active" : "");
-                    btn.textContent = `psd_${s.slotIndex}`;
+                    btn.textContent = cfg.slotLabel(s.slotIndex);
                     btn.addEventListener("click", () => {
                         selectedSlot = s.slotIndex;
                         render();
@@ -660,7 +680,7 @@ app.registerExtension({
             };
 
             const buildSprites = () => {
-                const slots = collectSlots(node);
+                const slots = collectSlots(node, cfg);
                 return slots.map((s, i) => ({
                     slotIndex: s.slotIndex,
                     offsetX: s.offsetX,
@@ -700,7 +720,7 @@ app.registerExtension({
                 badge.textContent = `${cw} × ${ch} · 视图 ${(view.zoom * 100).toFixed(0)}%`;
                 const sel = sprites.find((s) => s.slotIndex === selectedSlot);
                 if (sel) {
-                    status.textContent = `psd_${sel.slotIndex} · ${Math.round(sel.offsetX)},${Math.round(sel.offsetY)} · 缩放 ${sel.scale.toFixed(2)} · 旋转 ${sel.rotation.toFixed(1)}°`;
+                    status.textContent = `${cfg.slotLabel(sel.slotIndex)} · ${Math.round(sel.offsetX)},${Math.round(sel.offsetY)} · 缩放 ${sel.scale.toFixed(2)} · 旋转 ${sel.rotation.toFixed(1)}°`;
                 } else {
                     status.textContent =
                         "选择编辑按钮切换图层 · 滚轮缩放 · 中键/Alt 平移";
@@ -708,12 +728,12 @@ app.registerExtension({
             };
 
             const fetchLayers = async (force = false) => {
-                const slots = collectSlots(node);
+                const slots = collectSlots(node, cfg);
                 const includeHidden = Boolean(
                     widgetValue(node, "include_hidden", true),
                 );
                 if (!slots.length) {
-                    status.textContent = "请连接 PSD 输出到 psd_1…";
+                    status.textContent = cfg.connectHint;
                     setPreviewVisible(false);
                     return;
                 }
@@ -729,7 +749,7 @@ app.registerExtension({
                 if (inflight) return;
                 inflight = true;
                 refreshBtn.disabled = true;
-                status.textContent = "正在加载 PSD 图层…";
+                status.textContent = "正在加载预览图层…";
                 setPreviewVisible(false);
                 try {
                     const layers = [];
@@ -924,7 +944,7 @@ app.registerExtension({
             const onExecuted = ({ detail }) => {
                 const executedId = detail?.node;
                 if (executedId == null) return;
-                const slots = collectSlots(node);
+                const slots = collectSlots(node, cfg);
                 const hit = slots.some(
                     (s) =>
                         s.source.kind === "node" &&

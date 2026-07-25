@@ -1,4 +1,4 @@
-"""节点：Merge Layer Images — 将处理后的 RGB 与旁路 alpha 按索引匹配合并。
+"""节点：Apply Alpha to Layers — 将处理后的 RGB 与旁路 alpha 按索引匹配合并。
 
 按每张图处理后尺寸 vs layer_info 原始 width/height 缩放 alpha，再可选叠背景输出。
 """
@@ -20,7 +20,7 @@ def _scalar(x):
     return x[0] if isinstance(x, list) and x else x
 
 
-class PSDLayerImageJoiner:
+class ApplyAlphaToLayers:
     """自动匹配 images 与 layer_info，合并 alpha 并输出 layer_image 列表。"""
 
     @classmethod

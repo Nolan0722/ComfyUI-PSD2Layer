@@ -1,4 +1,4 @@
-"""节点2：PSDRebuilder — 按 layer_info 将图层归位并输出 PSD。
+"""节点：Layers to PSD — 按 layer_info 将图层归位并输出 PSD。
 
 输入可为放大后的图层：按相对 layer_info 的缩放比同比例调整位置与画布尺寸。
 """
@@ -21,7 +21,7 @@ def _scalar(x, default=0):
     return x if x is not None else default
 
 
-class PSDRebuilder:
+class LayersToPSD:
     """按 layer_info 归位写入 PSD；放大图层时同步缩放位置与画布。"""
 
     @classmethod

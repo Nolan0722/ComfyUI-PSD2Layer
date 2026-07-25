@@ -1,7 +1,10 @@
-"""Merge PSD Files 合成逻辑（节点执行与预览 API 共用）。"""
+"""Merge PSD Files / Merge Layer Images 合成逻辑。"""
 from __future__ import annotations
 
 import os
+
+from PIL import Image
+from psd_tools import PSDImage
 
 from . import psd_io
 
@@ -10,6 +13,9 @@ DEFAULT_MERGE_CANVAS_H = 6000
 
 # (psd_ref, offset_x, offset_y, scale, rotation_deg)
 MergeSlot = tuple[dict, int, int, float, float]
+
+# (pil_rgba, offset_x, offset_y, scale, rotation_deg, layer_name)
+ImageMergeSlot = tuple[Image.Image, int, int, float, float, str]
 
 
 def ref_group_label(ref: dict, index: int) -> str:
@@ -104,5 +110,71 @@ def compose_merged_psd(
 
     if not all_layers:
         raise ValueError("所选 PSD 中未找到可栅格化的图层")
+
+    return psd_io.build_psd_hierarchical(all_layers, W, H)
+
+
+def unique_image_layer_names(names: list[str]) -> list[str]:
+    """去重图层名：重复时追加 _2、_3…"""
+    out: list[str] = []
+    seen: dict[str, int] = {}
+    for name in names:
+        base = str(name).strip() or "Layer"
+        count = seen.get(base, 0) + 1
+        seen[base] = count
+        out.append(base if count == 1 else f"{base}_{count}")
+    return out
+
+
+def compose_merged_images(
+    slots: list[ImageMergeSlot],
+    *,
+    canvas_width: int = 0,
+    canvas_height: int = 0,
+) -> PSDImage:
+    """将多张 RGBA 图像按变换合成 PSD。
+
+    叠放顺序：image_5 最底，image_1 最顶（后写入的图层在上层）。
+    每张图作为一个根组内的像素图层。
+    """
+    if not slots:
+        raise ValueError("未提供任何图像输入")
+
+    W, H = merge_canvas_size(canvas_width, canvas_height)
+    names = unique_image_layer_names([name for *_, name in slots])
+    ordered = list(reversed(list(zip(slots, names))))
+
+    all_layers: list[dict] = []
+    for group_index, ((pil, ox, oy, slot_scale, rotation, _), group_name) in enumerate(
+        ordered
+    ):
+        if pil.mode != "RGBA":
+            pil = pil.convert("RGBA")
+        pw, ph = pil.size
+        sc = float(slot_scale) if slot_scale > 0 else 1.0
+        if sc != 1.0:
+            nw = max(1, int(round(pw * sc)))
+            nh = max(1, int(round(ph * sc)))
+            pil = pil.resize((nw, nh), Image.LANCZOS)
+            pw, ph = pil.size
+        base_x, base_y = slot_placement_on_canvas(pw, ph, W, H, 1.0, ox, oy)
+        # 缩放已写入像素；placement 用 scale=1 避免二次缩放
+        group_layers = [
+            {
+                "image": pil,
+                "left": base_x,
+                "top": base_y,
+                "opacity": 255,
+                "blend_mode": "NORMAL",
+                "name": group_name,
+                "visible": True,
+                "group_meta": [psd_io.make_root_group_meta(group_name)],
+                "group_indices": [int(group_index)],
+            }
+        ]
+        rcx = W / 2 + int(ox)
+        rcy = H / 2 + int(oy)
+        psd_io.rotate_layer_entries(group_layers, rcx, rcy, rotation)
+        all_layers.extend(group_layers)
 
     return psd_io.build_psd_hierarchical(all_layers, W, H)

@@ -16,7 +16,7 @@ _ROTATION_WIDGET = (
 _OFFSET_WIDGET = ("INT", {"default": 0, "min": -65536, "max": 65536, "step": 1})
 
 
-class PSDMerger:
+class MergePSDFiles:
     """把多个 PSD 引用合并到统一画布；每个源文件一个组，画布内可调变换。"""
 
     @classmethod

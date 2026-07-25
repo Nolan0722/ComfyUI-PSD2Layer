@@ -5,7 +5,7 @@ from ..utils import psd_io
 from ..utils.merge_preview import get_flattened_psd
 
 
-class PSDFileLoader:
+class LoadPSDFile:
     """加载 PSD 文件路径，输出 PSD 类型引脚与整图预览。"""
 
     @classmethod
