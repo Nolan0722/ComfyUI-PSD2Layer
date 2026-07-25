@@ -1,0 +1,22 @@
+[project]
+name = "psd2layer"
+description = "Split PSD into processable layer images, rebuild with metadata, and merge multiple PSDs or images on a shared canvas for ComfyUI."
+version = "1.0.0"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+classifiers = [
+    "Operating System :: OS Independent",
+]
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[project.urls]
+Repository = "https://github.com/Nolan0722/ComfyUI-PSD2Layer"
+"Bug Tracker" = "https://github.com/Nolan0722/ComfyUI-PSD2Layer/issues"
+
+[tool.comfy]
+# Must match the Publisher ID you create at https://registry.comfy.org (cannot change later)
+PublisherId = "nolan0722"
+DisplayName = "ComfyUI-PSD2Layer"

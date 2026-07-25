@@ -1,0 +1,19 @@
+# ComfyUI-Manager custom-node-list.json entry (legacy / optional)
+#
+# After the GitHub repo is public and Registry publish works, you can also
+# open a PR against https://github.com/Comfy-Org/ComfyUI-Manager
+# adding this object to the "custom_nodes" array in custom-node-list.json.
+#
+# Do NOT include a trailing ".git" on the URL.
+
+{
+  "author": "Nolan0722",
+  "title": "ComfyUI-PSD2Layer",
+  "id": "psd2layer",
+  "reference": "https://github.com/Nolan0722/ComfyUI-PSD2Layer",
+  "files": [
+    "https://github.com/Nolan0722/ComfyUI-PSD2Layer"
+  ],
+  "install_type": "git-clone",
+  "description": "PSD ↔ layer images: split, apply alpha, rebuild, merge PSDs / images on an interactive canvas, and save."
+}

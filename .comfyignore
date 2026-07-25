@@ -1,0 +1,6 @@
+# Keep registry package lean (gitignored files are already excluded)
+__pycache__/
+*.py[cod]
+.github/
+*.md
+!README.md
