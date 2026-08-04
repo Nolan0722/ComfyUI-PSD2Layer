@@ -5,6 +5,7 @@ const MERGE_CONFIGS = {
     "PSD2Layer Merge PSD Files": {
         slotPrefix: "psd",
         inputType: "PSD",
+        slotCount: 5,
         allowPath: true,
         emptyHint: "连接 PSD 后拖动画布操作",
         connectHint: "请连接 PSD 输出到 psd_1…",
@@ -13,6 +14,7 @@ const MERGE_CONFIGS = {
     "PSD2Layer Merge Layer Images": {
         slotPrefix: "image",
         inputType: "IMAGE",
+        slotCount: 10,
         allowPath: false,
         emptyHint: "连接图像后拖动画布操作",
         connectHint: "请连接图像到 image_1…（先 Queue 上游以刷新预览）",
@@ -224,7 +226,8 @@ function connectedSlotSource(node, slotIndex, cfg) {
 
 function collectSlots(node, cfg) {
     const slots = [];
-    for (let i = 1; i <= 5; i++) {
+    const slotCount = cfg.slotCount || 5;
+    for (let i = 1; i <= slotCount; i++) {
         const source = connectedSlotSource(node, i, cfg);
         if (!source) continue;
         slots.push({

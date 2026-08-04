@@ -134,7 +134,7 @@ def compose_merged_images(
 ) -> PSDImage:
     """将多张 RGBA 图像按变换合成 PSD。
 
-    叠放顺序：image_5 最底，image_1 最顶（后写入的图层在上层）。
+    叠放顺序：编号最大的 image 最底，image_1 最顶（后写入的图层在上层）。
     每张图作为一个根组内的像素图层。
     """
     if not slots:
