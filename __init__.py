@@ -1,10 +1,8 @@
 """ComfyUI-PSD2Layer: PSD <-> 图层图像管线双向转换自定义节点。"""
 import logging
-import os
 
 logging.getLogger("psd_tools").setLevel(logging.WARNING)
 
-from . import routes  # noqa: F401 — 注册预览 API
 from .nodes import (
     ApplyAlphaToLayers,
     LayersToPSD,
@@ -35,6 +33,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PSD2Layer Save PSD File": "Save PSD File",
 }
 
-WEB_DIRECTORY = os.path.join(os.path.dirname(__file__), "web", "js")
-
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

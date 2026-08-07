@@ -24,8 +24,8 @@ pip install -r requirements.txt
 | **PSD to Layers** | `psd` → 图层图像列表 + `layer_info` 列表 |
 | **Apply Alpha to Layers** | 处理后的 RGB + 旁路 alpha 合并为图层图像 |
 | **Layers to PSD** | 图层图像 + `layer_info` → `psd` + 压平预览 |
-| **Merge PSD Files** | 1～5 个 `psd` 合并到统一画布（节点内可拖拽调整） |
-| **Merge Layer Images** | 1～5 张 `IMAGE` 合并为 `psd`（节点内可拖拽调整） |
+| **Merge PSD Files** | 1～5 个 `psd` 按序号合并到统一画布 |
+| **Merge Layer Images** | 1～10 张 `IMAGE` 按序号合并为 `psd` |
 | **Save PSD File** | 将 `psd` 保存到磁盘 |
 
 自定义类型：
@@ -86,35 +86,34 @@ pip install -r requirements.txt
 
 ### Merge PSD Files
 
-将多个 PSD 合并到一张画布；每个源文件一个组（组名一般为文件名）。
+将多个 PSD 合并到一张画布；每个源一个根组（组内保留源 PSD 的完整嵌套组结构与原始命名/属性），各源居中放置。根组名默认 `PSD_1`、`PSD_2`…，可在 `name_N` 自定义。
 
 | 参数 | 说明 |
 |------|------|
 | `psd_1`～`psd_5` | `psd_1` 必填；可接 Load PSD File、Layers to PSD 等 |
-| `offset_x_N` / `offset_y_N` | 该源在画布上的偏移 |
-| `scale_N` / `rotation_N` | 缩放与旋转 |
-| `canvas_width` / `canvas_height` | 默认 3000×6000；`0` 使用默认 |
+| `name_1`～`name_5` | 每个源根组的组名，默认 `PSD_N`，可自行修改 |
+| `canvas_width` / `canvas_height` | 画布尺寸；为 `0` 时取所有输入中的最大尺寸 |
 | `include_hidden` | 合并时是否包含隐藏图层 |
 
 **输出** `psd`
 
-节点内嵌**交互画布**：拖动物体、角点缩放、旋转手柄；滚轮缩放视图，中键/Alt 平移。Queue 时按画布参数写入 PSD。叠放顺序：`psd_1` 最上，`psd_5` 最下。
-
-预览说明：上游为文件路径时可直接刷新；上游为内存 `psd`（如 Layers to PSD）时需先 Queue 运行上游，再点「刷新图层」。
+叠放顺序：`psd_1` 最上，`psd_5` 最下。
 
 ---
 
 ### Merge Layer Images
 
-与 Merge PSD Files 相同的画布交互，但输入为 **IMAGE**（1～5 张）。
+与 Merge PSD Files 同样的合成方式，但输入为 **IMAGE**（1～10 张），每张图一个图层组（组名默认 `Image_N`，可在 `name_N` 自定义）。
 
 | 参数 | 说明 |
 |------|------|
-| `image_1`～`image_5` | `image_1` 必填 |
-| `offset_x_N` / `offset_y_N` / `scale_N` / `rotation_N` | 同 Merge PSD Files |
-| `canvas_width` / `canvas_height` | 默认 3000×6000 |
+| `image_1`～`image_10` | `image_1` 必填 |
+| `name_1`～`name_10` | 每张图根组的组名，默认 `Image_N`，可自行修改 |
+| `canvas_width` / `canvas_height` | 画布尺寸；为 `0` 时取所有输入中的最大尺寸 |
 
 **输出** `psd`
+
+叠放顺序：`image_1` 最上，序号大的在下。
 
 ---
 
@@ -148,7 +147,7 @@ Load PSD File ──psd──> PSD to Layers ──layer_image──> （超分 
 
 ```
 Load PSD File ──┬──> Merge PSD Files ──psd──> Save PSD File
-Load PSD File ──┘      （节点内调位置后 Queue）
+Load PSD File ──┘
 ```
 
 也可将 **Layers to PSD** 的输出接入 Merge PSD Files。

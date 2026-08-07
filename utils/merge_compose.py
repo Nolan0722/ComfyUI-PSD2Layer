@@ -1,7 +1,9 @@
-"""Merge PSD Files / Merge Layer Images 合成逻辑。"""
-from __future__ import annotations
+"""Merge PSD Files / Merge Layer Images 合成逻辑。
 
-import os
+每个输入按槽位序号合成：序号小的在上层，大的在下层。输入居中放置到画布。
+画布尺寸：宽/高 <=0 时取所有输入对应维的最大值，否则用设定值。
+"""
+from __future__ import annotations
 
 from PIL import Image
 from psd_tools import PSDImage
@@ -11,101 +13,67 @@ from . import psd_io
 DEFAULT_MERGE_CANVAS_W = 3000
 DEFAULT_MERGE_CANVAS_H = 6000
 
-# (psd_ref, offset_x, offset_y, scale, rotation_deg)
-MergeSlot = tuple[dict, int, int, float, float]
 
-# (pil_rgba, offset_x, offset_y, scale, rotation_deg, layer_name)
-ImageMergeSlot = tuple[Image.Image, int, int, float, float, str]
-
-
-def ref_group_label(ref: dict, index: int) -> str:
-    """从 PSD 引用取组名：文件路径 basename，或 label / PSD_N。"""
-    if ref.get("label"):
-        return str(ref["label"])
-    path = ref.get("path")
-    if path:
-        return os.path.splitext(os.path.basename(str(path)))[0] or "PSD"
-    return f"PSD_{index}"
-
-
-def unique_group_names_from_refs(refs: list[dict]) -> list[str]:
-    names: list[str] = []
-    seen: dict[str, int] = {}
-    for i, ref in enumerate(refs):
-        base = ref_group_label(ref, i + 1)
-        count = seen.get(base, 0) + 1
-        seen[base] = count
-        names.append(base if count == 1 else f"{base}_{count}")
-    return names
-
-
-def merge_canvas_size(canvas_width: int, canvas_height: int) -> tuple[int, int]:
-    """解析合并画布尺寸；0 表示使用默认 3000×6000。"""
-    w = int(canvas_width) if canvas_width else DEFAULT_MERGE_CANVAS_W
-    h = int(canvas_height) if canvas_height else DEFAULT_MERGE_CANVAS_H
-    return max(1, w), max(1, h)
-
-
-def slot_placement_on_canvas(
-    psd_w: int,
-    psd_h: int,
-    canvas_w: int,
-    canvas_h: int,
-    scale: float,
-    offset_x: int,
-    offset_y: int,
+def compute_merge_canvas(
+    sizes: list[tuple[int, int]],
+    user_w: int,
+    user_h: int,
 ) -> tuple[int, int]:
-    """PSD 在画布上居中，再叠加用户 offset。"""
-    sc = float(scale) if scale > 0 else 1.0
-    sw = max(1, int(round(psd_w * sc)))
-    sh = max(1, int(round(psd_h * sc)))
-    base_x = (canvas_w - sw) // 2 + int(offset_x)
-    base_y = (canvas_h - sh) // 2 + int(offset_y)
-    return base_x, base_y
+    """合并画布尺寸：某维 <=0 时取所有输入该维最大值，否则用设定值。
+
+    无任何输入尺寸时回退默认 3000×6000。
+    """
+    max_w = max((w for w, _h in sizes), default=0)
+    max_h = max((h for _w, h in sizes), default=0)
+    W = int(user_w) if user_w and user_w > 0 else max(1, max_w)
+    H = int(user_h) if user_h and user_h > 0 else max(1, max_h)
+    if W <= 0:
+        W = DEFAULT_MERGE_CANVAS_W
+    if H <= 0:
+        H = DEFAULT_MERGE_CANVAS_H
+    return W, H
 
 
 def compose_merged_psd(
-    slots: list[MergeSlot],
+    slots: list[tuple[dict, str]],
     *,
     include_hidden: bool = True,
     canvas_width: int = 0,
     canvas_height: int = 0,
 ) -> PSDImage:
-    """按 PSD 引用（文件路径或内存）与变换合成 PSD。
+    """按 PSD 引用合成 PSD。
 
-    叠放顺序：psd_5 最底，psd_1 最顶（后写入的图层在上层）。
+    slots: (psd_ref, group_name) 列表，group_name 为该源根组名（用户可自定义）。
+    每个源居中放置到画布；组内保留源 PSD 的完整嵌套组结构与原始命名。
+    叠放顺序：序号最大的最底，psd_1 最顶（后写入的在上层）。
     """
     if not slots:
         raise ValueError("未提供任何 PSD 输入")
 
-    W, H = merge_canvas_size(canvas_width, canvas_height)
+    psd_images = [psd_io.resolve_psd_image(ref) for ref, _name in slots]
+    names = [str(name) for _ref, name in slots]
+    W, H = compute_merge_canvas(
+        [(psd.width, psd.height) for psd in psd_images],
+        canvas_width,
+        canvas_height,
+    )
 
-    refs = [ref for ref, _, _, _, _ in slots]
-    group_names = unique_group_names_from_refs(refs)
-
-    # 自底向上：先 psd_5，最后 psd_1
-    ordered = list(reversed(list(zip(slots, group_names))))
+    # 自底向上：先序号最大，最后 psd_1
+    ordered = list(reversed(list(zip(psd_images, names))))
 
     all_layers: list[dict] = []
-    for group_index, ((ref, ox, oy, slot_scale, rotation), group_name) in enumerate(
-        ordered
-    ):
-        psd = psd_io.resolve_psd_image(ref)
+    for group_index, (psd, group_name) in enumerate(ordered):
         pw, ph = psd.size
-        sc = float(slot_scale) if slot_scale > 0 else 1.0
-        base_x, base_y = slot_placement_on_canvas(pw, ph, W, H, sc, ox, oy)
+        cx = (W - pw) // 2
+        cy = (H - ph) // 2
         group_layers = psd_io.collect_psd_layers_for_merge(
             psd,
-            offset_x=base_x,
-            offset_y=base_y,
+            offset_x=cx,
+            offset_y=cy,
             group_name=group_name,
             group_index=group_index,
             include_hidden=include_hidden,
-            scale=sc,
         )
-        rcx = W / 2 + int(ox)
-        rcy = H / 2 + int(oy)
-        psd_io.rotate_layer_entries(group_layers, rcx, rcy, rotation)
         all_layers.extend(group_layers)
 
     if not all_layers:
@@ -114,56 +82,41 @@ def compose_merged_psd(
     return psd_io.build_psd_hierarchical(all_layers, W, H)
 
 
-def unique_image_layer_names(names: list[str]) -> list[str]:
-    """去重图层名：重复时追加 _2、_3…"""
-    out: list[str] = []
-    seen: dict[str, int] = {}
-    for name in names:
-        base = str(name).strip() or "Layer"
-        count = seen.get(base, 0) + 1
-        seen[base] = count
-        out.append(base if count == 1 else f"{base}_{count}")
-    return out
-
-
 def compose_merged_images(
-    slots: list[ImageMergeSlot],
+    slots: list[tuple[Image.Image, str]],
     *,
     canvas_width: int = 0,
     canvas_height: int = 0,
 ) -> PSDImage:
-    """将多张 RGBA 图像按变换合成 PSD。
+    """将多张图像合成 PSD。
 
-    叠放顺序：编号最大的 image 最底，image_1 最顶（后写入的图层在上层）。
-    每张图作为一个根组内的像素图层。
+    每张图居中放置，作为根组内单层。叠放顺序：编号最大的最底，image_1 最顶。
+    画布尺寸：宽/高 <=0 时取所有输入对应维最大值，否则用设定值。
     """
     if not slots:
         raise ValueError("未提供任何图像输入")
 
-    W, H = merge_canvas_size(canvas_width, canvas_height)
-    names = unique_image_layer_names([name for *_, name in slots])
-    ordered = list(reversed(list(zip(slots, names))))
-
-    all_layers: list[dict] = []
-    for group_index, ((pil, ox, oy, slot_scale, rotation, _), group_name) in enumerate(
-        ordered
-    ):
+    pils = []
+    for pil, _name in slots:
         if pil.mode != "RGBA":
             pil = pil.convert("RGBA")
-        pw, ph = pil.size
-        sc = float(slot_scale) if slot_scale > 0 else 1.0
-        if sc != 1.0:
-            nw = max(1, int(round(pw * sc)))
-            nh = max(1, int(round(ph * sc)))
-            pil = pil.resize((nw, nh), Image.LANCZOS)
-            pw, ph = pil.size
-        base_x, base_y = slot_placement_on_canvas(pw, ph, W, H, 1.0, ox, oy)
-        # 缩放已写入像素；placement 用 scale=1 避免二次缩放
-        group_layers = [
+        pils.append(pil)
+
+    W, H = compute_merge_canvas(
+        [pil.size for pil in pils], canvas_width, canvas_height
+    )
+
+    names = [str(name) for _pil, name in slots]
+    ordered = list(reversed(list(zip(pils, names))))
+
+    all_layers: list[dict] = []
+    for group_index, (pil, group_name) in enumerate(ordered):
+        w, h = pil.size
+        all_layers.append(
             {
                 "image": pil,
-                "left": base_x,
-                "top": base_y,
+                "left": (W - w) // 2,
+                "top": (H - h) // 2,
                 "opacity": 255,
                 "blend_mode": "NORMAL",
                 "name": group_name,
@@ -171,10 +124,6 @@ def compose_merged_images(
                 "group_meta": [psd_io.make_root_group_meta(group_name)],
                 "group_indices": [int(group_index)],
             }
-        ]
-        rcx = W / 2 + int(ox)
-        rcy = H / 2 + int(oy)
-        psd_io.rotate_layer_entries(group_layers, rcx, rcy, rotation)
-        all_layers.extend(group_layers)
+        )
 
     return psd_io.build_psd_hierarchical(all_layers, W, H)

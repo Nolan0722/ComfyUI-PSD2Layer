@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import math
 import os
 
 import numpy as np
@@ -77,9 +76,12 @@ def parse_blend_mode(mode) -> BlendMode:
 # 张量 ↔ PIL
 # ---------------------------------------------------------------------------
 def _drop_batch(t: torch.Tensor) -> torch.Tensor:
-    """去掉 batch 维 [1,H,W,C] → [H,W,C]，并转到 CPU float。"""
+    """去掉 batch 维 [B,H,W,C] → [H,W,C]，并转到 CPU float。
+
+    B>1 时取首帧（单图处理辅助，避免多帧 IMAGE 导致 PIL 转换维度错误）。
+    """
     t = t.detach().cpu()
-    if t.ndim == 4 and t.shape[0] == 1:
+    if t.ndim == 4:
         t = t[0]
     return t.float()
 
@@ -403,6 +405,14 @@ def make_root_group_meta(name: str) -> dict:
     }
 
 
+def sibling_index(layer, parent) -> int:
+    """layer 在 parent 直接子节点中的序号（唯一定位同名组）。"""
+    for i, sibling in enumerate(parent):
+        if sibling is layer:
+            return i
+    return 0
+
+
 def collect_psd_layers_for_merge(
     psd: PSDImage,
     *,
@@ -411,91 +421,60 @@ def collect_psd_layers_for_merge(
     group_name: str,
     group_index: int,
     include_hidden: bool = True,
-    scale: float = 1.0,
 ) -> list[dict]:
-    """递归收集 PSD 像素图层，包入指定根组并施加整体偏移与缩放。"""
-    layers: list[dict] = []
-    group_meta = [make_root_group_meta(group_name)]
-    group_indices = [int(group_index)]
-    ox, oy = int(offset_x), int(offset_y)
-    sc = float(scale)
-    if sc <= 0:
-        sc = 1.0
+    """递归收集 PSD 像素图层，在最外层根组（group_name）下保留源 PSD 的完整嵌套组结构。
 
-    def walk(layer, parent):
+    每个像素图层的 group_meta / group_indices 描述自外到内的完整组链：
+    [根组, 源顶层组, ..., 该图层直接父组]，组命名与属性均沿用源 PSD。
+    """
+    layers: list[dict] = []
+    root_meta = make_root_group_meta(group_name)
+    root_index = int(group_index)
+    ox, oy = int(offset_x), int(offset_y)
+
+    def walk(layer, parent, meta_chain, index_chain):
         if not include_hidden:
             if hasattr(layer, "is_visible") and not layer.is_visible():
                 return
             if not getattr(layer, "visible", True):
                 return
         if layer.is_group():
+            meta = {
+                "name": layer.name,
+                "visible": layer.visible,
+                "opacity": layer.opacity,
+                "blend_mode": blend_mode_to_str(layer.blend_mode),
+                "open_folder": getattr(layer, "open_folder", True),
+            }
+            my_index = sibling_index(layer, parent)
             for child in layer:
-                walk(child, layer)
+                walk(
+                    child,
+                    layer,
+                    meta_chain + [meta],
+                    index_chain + [my_index],
+                )
         else:
             pil = rasterize_layer(layer, include_hidden=include_hidden)
             if pil is None:
                 return
-            left = int(layer.left)
-            top = int(layer.top)
-            if sc != 1.0:
-                nw = max(1, int(round(pil.width * sc)))
-                nh = max(1, int(round(pil.height * sc)))
-                pil = pil.resize((nw, nh), Image.LANCZOS)
-                left = int(round(left * sc))
-                top = int(round(top * sc))
             layers.append(
                 {
                     "image": pil,
-                    "left": left + ox,
-                    "top": top + oy,
+                    "left": int(layer.left) + ox,
+                    "top": int(layer.top) + oy,
                     "opacity": layer.opacity,
                     "blend_mode": blend_mode_to_str(layer.blend_mode),
                     "name": layer.name,
                     "visible": layer.visible,
-                    "group_meta": group_meta,
-                    "group_indices": group_indices,
+                    "group_meta": meta_chain,
+                    "group_indices": index_chain,
                 }
             )
 
     for layer in psd:
-        walk(layer, psd)
+        walk(layer, psd, [root_meta], [root_index])
     return layers
-
-
-def rotate_layer_entries(
-    layers: list[dict],
-    rcx: float,
-    rcy: float,
-    angle_deg: float,
-) -> None:
-    """绕画布点 (rcx, rcy) 旋转已定位图层（用于 Merge 整文件旋转）。"""
-    if not angle_deg:
-        return
-    angle = math.radians(float(angle_deg))
-    cos_a, sin_a = math.cos(angle), math.sin(angle)
-    for L in layers:
-        pil = L["image"]
-        lw, lh = pil.size
-        lc_x = L["left"] + lw / 2
-        lc_y = L["top"] + lh / 2
-        dx, dy = lc_x - rcx, lc_y - rcy
-        new_cx = rcx + dx * cos_a - dy * sin_a
-        new_cy = rcy + dx * sin_a + dy * cos_a
-        pil = pil.rotate(-angle_deg, expand=True, resample=Image.BICUBIC)
-        nlw, nlh = pil.size
-        L["image"] = pil
-        L["left"] = int(round(new_cx - nlw / 2))
-        L["top"] = int(round(new_cy - nlh / 2))
-
-
-def canvas_bbox_from_layers(layers: list[dict]) -> tuple[int, int]:
-    """根据图层列表计算最小外包画布 (W, H)。"""
-    max_r, max_b = 0, 0
-    for L in layers:
-        w, h = L["image"].size
-        max_r = max(max_r, int(L["left"]) + w)
-        max_b = max(max_b, int(L["top"]) + h)
-    return max(1, max_r), max(1, max_b)
 
 
 def flatten_psd_to_rgba(psd: PSDImage, include_hidden: bool = True) -> Image.Image:
